@@ -1,0 +1,37 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tool caches and build artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Environment and secrets
+.env
+.env.*
+*.key
+*.pem
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Generated audio artifacts
+output/
+ref/
+*.wav
+*.flac
+*.mp3
+
+# Logs
+*.log
