@@ -8,7 +8,7 @@ This project provides an end-to-end pipeline to:
 
 The main script is:
 
-- `ray_voice_design_clone.py`
+- `voice_design_clone.py`
 
 ## Features
 
@@ -25,7 +25,7 @@ The main script is:
 
 ```text
 Qwen3-TT/
-├── ray_voice_design_clone.py
+├── voice_design_clone.py
 ├── requirements.txt
 ├── README.md
 ├── ref/                # Generated emotion-specific reference audios
@@ -57,7 +57,7 @@ If you want to keep `attn_implementation="flash_attention_2"`, install FlashAtte
 Run from this folder:
 
 ```bash
-python ray_voice_design_clone.py
+python voice_design_clone.py
 ```
 
 The script will:
@@ -93,7 +93,7 @@ Example emotions:
 
 ## Configuration
 
-Edit `build_default_data()` in `ray_voice_design_clone.py` to customize:
+Edit `build_default_data()` in `voice_design_clone.py` to customize:
 
 - `base_identity`
 - `ref_instruct_by_emotion`
