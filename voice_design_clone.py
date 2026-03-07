@@ -191,6 +191,7 @@ def build_default_data() -> GenerationData:
     base_identity = (
         "Voice of a 30-year-old men, AI assistant"
     )
+    
     # Default dataset with one instruction and one EN/ES sentence per emotion.
     return GenerationData(
         emotion_order=[
