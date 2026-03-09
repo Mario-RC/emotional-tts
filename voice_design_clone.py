@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+import argparse
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -7,12 +8,14 @@ import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel
 
+from voice_personality_config import build_default_generation_config
+
 
 # Global model/runtime configuration used by both generation stages.
 @dataclass(frozen=True)
 class ModelConfig:
     voice_design_model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-    clone_model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base" # "Qwen3-TTS-12Hz-0.6B-Base"
+    clone_model_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"  # "Qwen3-TTS-12Hz-0.6B-Base"
     device_map: str = "cuda:0"
     dtype: torch.dtype = torch.bfloat16
     attn_implementation: str = "flash_attention_2"
@@ -25,12 +28,14 @@ class GenerationData:
     emotion_order: List[str]
     # Maps each emotion to the exact style instruction used to build references.
     ref_instruct_by_emotion: Dict[str, str]
-    # Shared reference texts used to generate EN/ES reference audios.
-    ref_text_en: str
-    ref_text_es: str
+    # Per-emotion reference transcripts used in design and clone prompt creation.
+    voice_design_ref_text_en_by_emotion: Dict[str, str]
+    voice_design_ref_text_es_by_emotion: Dict[str, str]
     # Per-emotion target sentences for final cloned outputs.
     sentences_en_by_emotion: Dict[str, str]
     sentences_es_by_emotion: Dict[str, str]
+    # Output folder label for this personality preset.
+    personality_folder: str
 
 
 class VoiceDesignClonePipeline:
@@ -38,13 +43,16 @@ class VoiceDesignClonePipeline:
     def __init__(self, config: ModelConfig, data: GenerationData) -> None:
         self.config = config
         self.data = data
-        self.ref_dir = Path("ref")
-        self.output_dir = Path("output")
+        self.output_root_dir = Path("output")
+        self.personality_dir = self.output_root_dir / self.data.personality_folder
+        self.ref_dir = self.personality_dir / "voice_design_clone_ref"
+        self.clone_dir = self.personality_dir / "clones"
 
     def run(self) -> None:
         # Prepare filesystem and fail fast if emotion maps are inconsistent.
         self._ensure_output_dirs()
         self._validate_emotion_maps()
+        self._write_personality_file()
 
         # Load models once to avoid repeated initialization overhead.
         design_model = self._load_voice_design_model()
@@ -54,21 +62,23 @@ class VoiceDesignClonePipeline:
         for emotion in self.data.emotion_order:
             emotion_tag = self._file_tag(emotion)
             instruct = self.data.ref_instruct_by_emotion[emotion]
+            ref_text_en = self.data.voice_design_ref_text_en_by_emotion[emotion]
+            ref_text_es = self.data.voice_design_ref_text_es_by_emotion[emotion]
 
             # Create emotion-specific reference audios in EN and ES with the same style instruction.
-            ref_wav_en, sr = self._generate_reference_audio(
+            ref_wav_en, sr = self._generate_ref_audio(
                 model=design_model,
-                text=self.data.ref_text_en,
+                text=ref_text_en,
                 language="English",
                 instruct=instruct,
-                out_path=self.ref_dir / f"voice_design_reference_en_{emotion_tag}.wav",
+                out_path=self.ref_dir / f"voice_design_ref_en_{emotion_tag}.wav",
             )
-            ref_wav_es, _ = self._generate_reference_audio(
+            ref_wav_es, _ = self._generate_ref_audio(
                 model=design_model,
-                text=self.data.ref_text_es,
+                text=ref_text_es,
                 language="Spanish",
                 instruct=instruct,
-                out_path=self.ref_dir / f"voice_design_reference_es_{emotion_tag}.wav",
+                out_path=self.ref_dir / f"voice_design_ref_es_{emotion_tag}.wav",
             )
 
             # Build clone prompts from the generated references.
@@ -76,13 +86,13 @@ class VoiceDesignClonePipeline:
                 clone_model=clone_model,
                 ref_wav=ref_wav_en,
                 sample_rate=sr,
-                ref_text=self.data.ref_text_en,
+                ref_text=ref_text_en,
             )
             voice_clone_prompt_es = self._build_clone_prompt(
                 clone_model=clone_model,
                 ref_wav=ref_wav_es,
                 sample_rate=sr,
-                ref_text=self.data.ref_text_es,
+                ref_text=ref_text_es,
             )
 
             # Generate one final cloned sentence per language for the same emotion.
@@ -91,20 +101,37 @@ class VoiceDesignClonePipeline:
                 text=self.data.sentences_en_by_emotion[emotion],
                 language="English",
                 voice_clone_prompt=voice_clone_prompt_en,
-                out_file=self.output_dir / f"clone_en_{emotion_tag}.wav",
+                out_file=self.clone_dir / f"clone_en_{emotion_tag}.wav",
             )
             self._generate_single_clone(
                 clone_model=clone_model,
                 text=self.data.sentences_es_by_emotion[emotion],
                 language="Spanish",
                 voice_clone_prompt=voice_clone_prompt_es,
-                out_file=self.output_dir / f"clone_es_{emotion_tag}.wav",
+                out_file=self.clone_dir / f"clone_es_{emotion_tag}.wav",
             )
 
     def _ensure_output_dirs(self) -> None:
-        # Ensure output folders exist before any write operation.
+        # Ensure personality folders exist before any write operation.
+        self.output_root_dir.mkdir(parents=True, exist_ok=True)
         self.ref_dir.mkdir(parents=True, exist_ok=True)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.clone_dir.mkdir(parents=True, exist_ok=True)
+
+    def _write_personality_file(self) -> None:
+        # Persist the exact personality instructions used for this execution.
+        personality_file = self.personality_dir / "personality.txt"
+        lines = [
+            "pipeline: voice_design_clone",
+            f"personality_folder: {self.data.personality_folder}",
+            f"output_folder: {self.personality_dir}",
+            f"clone_folder: {self.clone_dir}",
+            f"ref_folder: {self.ref_dir}",
+            "instructions_by_emotion:",
+        ]
+        for emotion in self.data.emotion_order:
+            instruct = self.data.ref_instruct_by_emotion[emotion]
+            lines.append(f"- {emotion}: {instruct}")
+        personality_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _load_voice_design_model(self) -> Qwen3TTSModel:
         # Model used to synthesize style reference audios from text + instruction.
@@ -124,7 +151,7 @@ class VoiceDesignClonePipeline:
             attn_implementation=self.config.attn_implementation,
         )
 
-    def _generate_reference_audio(
+    def _generate_ref_audio(
         self,
         model: Qwen3TTSModel,
         text: str,
@@ -175,6 +202,10 @@ class VoiceDesignClonePipeline:
         base = set(self.data.emotion_order)
         if set(self.data.ref_instruct_by_emotion.keys()) != base:
             raise ValueError("ref_instruct_by_emotion keys must match emotion_order")
+        if set(self.data.voice_design_ref_text_en_by_emotion.keys()) != base:
+            raise ValueError("voice_design_ref_text_en_by_emotion keys must match emotion_order")
+        if set(self.data.voice_design_ref_text_es_by_emotion.keys()) != base:
+            raise ValueError("voice_design_ref_text_es_by_emotion keys must match emotion_order")
         if set(self.data.sentences_en_by_emotion.keys()) != base:
             raise ValueError("sentences_en_by_emotion keys must match emotion_order")
         if set(self.data.sentences_es_by_emotion.keys()) != base:
@@ -187,69 +218,69 @@ class VoiceDesignClonePipeline:
 
 
 def build_default_data() -> GenerationData:
-    # Shared speaker identity descriptor used as the base for all emotion instructions.
-    base_identity = (
-        "Voice of a 30-year-old men, AI assistant"
-    )
-    
-    # Default dataset with one instruction and one EN/ES sentence per emotion.
+    # Build generation defaults from a centralized config module.
+    generation_config = build_default_generation_config()
     return GenerationData(
-        emotion_order=[
-            "anger",
-            "disgust",
-            "fear",
-            "happiness",
-            "neutral",
-            "sadness",
-            "surprise",
+        emotion_order=generation_config["emotion_order"],
+        ref_instruct_by_emotion=generation_config["ref_instruct_by_emotion"],
+        voice_design_ref_text_en_by_emotion=generation_config[
+            "voice_design_ref_text_en_by_emotion"
         ],
-        ref_instruct_by_emotion={
-            "anger": f"{base_identity}, robot companion. Clear articulation. " +
-                      "Speaks with an angry, stern, and frustrated tone. Sharp delivery, loud, and lacking patience.",
-            "disgust": f"{base_identity}, robot companion. Clear articulation. " +
-                        "Speaks with a disgusted, repulsed, and uncomfortable tone. Expressing strong aversion and dislike.",
-            "fear": f"{base_identity}, robot companion. Clear articulation. " +
-                    "Speaks with a terrified, panicked, and trembling tone. Breathless and stuttering delivery, expressing extreme fear, distress, and high anxiety.",
-            "happiness": f"{base_identity}, friendly and warm robot companion. Clear articulation. " +
-                         "Speaks with a very happy, excited, and cheerful tone. Bright, enthusiastic, and highly engaging.",
-            "neutral": f"{base_identity}, helpful robot companion. Clear articulation. " +
-                       "Speaks with a neutral, calm, and composed tone. Even pacing, informative, without strong emotion.",
-            "sadness": f"{base_identity}, empathetic robot companion. Clear articulation. " +
-                       "Speaks with a heartbroken, devastated, and tearful tone. Voice cracking with deep grief, very slow pacing, heavy sighs, expressing profound sorrow and despair.",
-            "surprise": f"{base_identity}, expressive robot companion. Clear articulation. " +
-                        "Speaks with a highly surprised, astonished, and amazed tone. Wide-eyed, breathless, and sudden energy.",
-        },
-        # Base reference texts used to build clone prompts in each language.
-        ref_text_en=(
-            "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it."
-        ),
-        ref_text_es=(
-            "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites."
-        ),
-        sentences_en_by_emotion={
-            "anger": "It makes me really upset when people don't listen. We need to respect the rules!",
-            "disgust": "Ugh, that smells like spoiled milk. We should throw it away immediately.",
-            "fear": "Wait, did you hear that loud noise? I... I'm really scared! Please, don't leave me alone in the dark!",
-            "happiness": "Congratulations! That's wonderful news! I'm so happy for you.",
-            "neutral": "The schedule for today includes a walk in the park and reading a book.",
-            "sadness": "That's disheartening to hear. I'm here to help you get through this.",
-            "surprise": "Oh wow, I hadn't even thought about that! That is a truly unexpected and fantastic idea.",
-        },
-        sentences_es_by_emotion={
-            "anger": "¡Me molesta mucho cuando la gente no escucha! Tenemos que respetar las reglas.",
-            "disgust": "Uf, eso huele a leche en mal estado. Deberíamos tirarlo de inmediato.",
-            "fear": "¡Espera! ¿Has oído ese ruido tan fuerte? Yo... ¡tengo mucho miedo! ¡Por favor, no me dejes solo en la oscuridad!",
-            "happiness": "¡Felicidades! ¡Son noticias maravillosas! Me alegro mucho por ti.",
-            "neutral": "El horario para hoy incluye un paseo por el parque y leer un libro.",
-            "sadness": "Es desalentador escuchar eso. Estoy aquí para ayudarte a superar esto.",
-            "surprise": "¡Oh, vaya, ni siquiera había pensado en eso! Es una idea realmente inesperada y fantástica.",
-        },
+        voice_design_ref_text_es_by_emotion=generation_config[
+            "voice_design_ref_text_es_by_emotion"
+        ],
+        sentences_en_by_emotion=generation_config["sentences_en_by_emotion"],
+        sentences_es_by_emotion=generation_config["sentences_es_by_emotion"],
+        personality_folder=generation_config["personality_folder"],
     )
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--output_dir",
+        "--output-dir",
+        dest="output_dir",
+        nargs="+",
+        help=(
+            "Output folder name under output/. "
+            "Example: --output_dir personality_1"
+        ),
+    )
+    # Accepts legacy freeform usage like: python3 voice_design_clone.py -- output_dir personality 3
+    parser.add_argument("legacy_output_dir", nargs="*")
+    return parser.parse_args()
+
+
+def _resolve_output_folder(args: argparse.Namespace) -> str | None:
+    tokens: List[str] = []
+    if args.output_dir:
+        tokens = args.output_dir
+    elif args.legacy_output_dir:
+        legacy_tokens = args.legacy_output_dir
+        if legacy_tokens[0] in {"output_dir", "output-dir", "--output_dir", "--output-dir"}:
+            tokens = legacy_tokens[1:]
+        else:
+            tokens = legacy_tokens
+
+    if not tokens:
+        return None
+
+    clean_parts = [part.strip() for part in tokens if part.strip()]
+    if not clean_parts:
+        return None
+    return "_".join(clean_parts)
 
 
 def main() -> None:
     # Entry point used when running this file as a script.
-    pipeline = VoiceDesignClonePipeline(config=ModelConfig(), data=build_default_data())
+    args = _parse_args()
+    data = build_default_data()
+    output_folder_override = _resolve_output_folder(args)
+    if output_folder_override:
+        data = replace(data, personality_folder=output_folder_override)
+
+    pipeline = VoiceDesignClonePipeline(config=ModelConfig(), data=data)
     pipeline.run()
 
 

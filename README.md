@@ -1,45 +1,38 @@
-# Emotion-Aware Voice Design + Voice Cloning (Qwen3-TTS)
+# Emotional TTS (Qwen3-TTS)
 
-This project provides an end-to-end pipeline to:
+This project contains two main pipelines to generate emotion-aware audio in English and Spanish.
 
-1. Generate emotion-conditioned reference voices with **Qwen3-TTS VoiceDesign**.
-2. Build reusable clone prompts from those references.
-3. Synthesize final English and Spanish utterances with **Qwen3-TTS Base** while preserving emotion.
-
-The main script is:
+## Main Scripts
 
 - `voice_design_clone.py`
+  Generates reference voices from instructions (VoiceDesign) and then clones the final target sentences.
 
-## Features
+- `voice_clone.py`
+  Clones directly from uploaded reference audios (without VoiceDesign).
 
-- Class-based, readable pipeline (`VoiceDesignClonePipeline`).
-- Explicit emotion mapping via dictionaries to guarantee alignment:
-  - `emotion -> instruction`
-  - `emotion -> English sentence`
-  - `emotion -> Spanish sentence`
-- Built-in map consistency validation (`_validate_emotion_maps`).
-- Automatic creation of output folders (`ref/`, `output/`).
-- Emotion-specific output files for easier evaluation.
+- `voice_personality_config.py`
+  Central configuration for emotions, reference texts, target sentences, and personality folder name.
 
-## Project Structure
+## Emotions Used
 
-```text
-Qwen3-TT/
-├── voice_design_clone.py
-├── requirements.txt
-├── README.md
-├── ref/                # Generated emotion-specific reference audios
-└── output/             # Final cloned audios (EN/ES per emotion)
-```
+Emotion keys must match across all configuration dictionaries:
+
+- `anger`
+- `disgust`
+- `fear`
+- `happiness`
+- `neutral`
+- `sadness`
+- `surprise`
 
 ## Requirements
 
-- Linux (recommended for GPU workflows)
+- Linux (recommended)
 - Python 3.10+
-- NVIDIA GPU + CUDA (recommended for performance)
-- Access to Hugging Face model download endpoints
+- NVIDIA GPU + CUDA (recommended)
+- Access to Hugging Face model downloads
 
-Python dependencies are listed in `requirements.txt`.
+Dependencies are listed in `requirements.txt`.
 
 ## Installation
 
@@ -50,108 +43,171 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-If you want to keep `attn_implementation="flash_attention_2"`, install FlashAttention in your environment.
+If you use `attn_implementation="flash_attention_2"`, install a FlashAttention version compatible with your environment.
 
-## Usage
+## Pipeline 1: VoiceDesign + Clone
 
-Run from this folder:
+Script: `voice_design_clone.py`
 
-```bash
-python voice_design_clone.py
+### What It Does
+
+1. Loads VoiceDesign model: `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
+2. Loads Base model for cloning: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
+3. For each emotion:
+4. Generates EN and ES references from personality instructions.
+5. Builds a voice-clone prompt from each reference.
+6. Generates final EN and ES cloned outputs.
+
+### Output For This Pipeline
+
+This script uses one folder per personality:
+
+```text
+output/
+  <personality_folder>/
+    personality.txt
+    clones/
+      clone_en_<emotion>.wav
+      clone_es_<emotion>.wav
+    voice_design_clone_ref/
+      voice_design_ref_en_<emotion>.wav
+      voice_design_ref_es_<emotion>.wav
 ```
 
-The script will:
+## Pipeline 2: Clone From Uploaded Audios
 
-1. Load `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
-2. Load `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
-3. For each emotion in `emotion_order`:
-   - Generate reference audio in English and Spanish.
-   - Build voice clone prompts.
-   - Generate final cloned sentence in English and Spanish.
+Script: `voice_clone.py`
 
-## Output Files
+### What It Does
 
-### Reference files (`ref/`)
+1. Reads reference audios from `voice_clone_ref/`.
+2. Validates that all expected files exist (14 total).
+3. Builds clone prompts by emotion and language.
+4. Generates final EN and ES outputs per emotion.
+5. Copies the reference audios used into the output folder.
+6. Saves metadata in `personality.txt`.
 
-- `voice_design_reference_en_<emotion>.wav`
-- `voice_design_reference_es_<emotion>.wav`
+### Important: Reference Transcriptions
 
-### Final files (`output/`)
+In `voice_clone.py`, `VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION` and `VOICE_CLONE_REFS_TEXT_ES_BY_EMOTION`
+provide the transcriptions of your reference audios.
 
-- `clone_en_<emotion>.wav`
-- `clone_es_<emotion>.wav`
+You must write these transcriptions in `voice_personality_config.py`:
 
-Example emotions:
+- `VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION`
+- `VOICE_CLONE_REFS_TEXT_ES_BY_EMOTION`
 
-- `anger`
-- `disgust`
-- `fear`
-- `happiness`
-- `neutral`
-- `sadness`
-- `surprise`
+These texts are used by `create_voice_clone_prompt(...)` and should match what is spoken in the uploaded reference audios as closely as possible.
+If they do not match, cloning quality can degrade.
+
+### Exact Input Audio Names
+
+Upload these files under `voice_clone_ref/`:
+
+- `voice_clone_ref_en_anger.wav`
+- `voice_clone_ref_en_disgust.wav`
+- `voice_clone_ref_en_fear.wav`
+- `voice_clone_ref_en_happiness.wav`
+- `voice_clone_ref_en_neutral.wav`
+- `voice_clone_ref_en_sadness.wav`
+- `voice_clone_ref_en_surprise.wav`
+- `voice_clone_ref_es_anger.wav`
+- `voice_clone_ref_es_disgust.wav`
+- `voice_clone_ref_es_fear.wav`
+- `voice_clone_ref_es_happiness.wav`
+- `voice_clone_ref_es_neutral.wav`
+- `voice_clone_ref_es_sadness.wav`
+- `voice_clone_ref_es_surprise.wav`
+
+If any file is missing, the script raises `FileNotFoundError` with the missing file list.
+
+### Output For This Pipeline
+
+```text
+output/
+  <personality_folder>/
+    personality.txt
+    clones/
+      clone_en_<emotion>.wav
+      clone_es_<emotion>.wav
+    voice_clone_ref/
+      voice_clone_ref_en_<emotion>.wav
+      voice_clone_ref_es_<emotion>.wav
+```
 
 ## Configuration
 
-Edit `build_default_data()` in `voice_design_clone.py` to customize:
+Edit `voice_personality_config.py` to change:
 
-- `base_identity`
-- `ref_instruct_by_emotion`
-- `ref_text_en` / `ref_text_es`
-- `sentences_en_by_emotion` / `sentences_es_by_emotion`
-- `emotion_order`
+- `DEFAULT_PERSONALITY_FOLDER`
+- `BASE_IDENTITY`
+- `PERSONALITY_TRAITS_BY_EMOTION`
+- `VOICE_DESIGN_REF_TEXT_EN_BY_EMOTION`
+- `VOICE_DESIGN_REF_TEXT_ES_BY_EMOTION`
+- `VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION`
+- `VOICE_CLONE_REFS_TEXT_ES_BY_EMOTION`
+- `DEFAULT_SENTENCES_EN_BY_EMOTION`
+- `DEFAULT_SENTENCES_ES_BY_EMOTION`
+- `DEFAULT_EMOTION_ORDER`
 
-Edit `ModelConfig` to customize runtime/model behavior:
+`voice_clone.py` and `voice_design_clone.py` use this configuration by default.
 
-- `voice_design_model_id`
-- `clone_model_id`
-- `device_map`
-- `dtype`
-- `attn_implementation`
+For `voice_design_clone.py`, use `VOICE_DESIGN_REF_TEXT_EN_BY_EMOTION` and `VOICE_DESIGN_REF_TEXT_ES_BY_EMOTION` to define per-emotion ref transcripts.
 
-## Notes on Model/Runtime
+For `voice_clone.py`, use `VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION` and `VOICE_CLONE_REFS_TEXT_ES_BY_EMOTION` to define per-emotion refs transcripts of uploaded audios.
 
-- Current defaults assume CUDA (`device_map="cuda:0"`).
-- If FlashAttention is not installed, either install it or change:
+## Execution
 
-```python
-attn_implementation = "eager"
+From the `emotional-tts/` folder:
+
+```bash
+python voice_design_clone.py
+python voice_clone.py
 ```
 
-- First run may take longer due to model downloads and cache initialization.
+To override the output folder name used by `voice_design_clone.py` or `voice_clone.py`:
 
-## Troubleshooting
+```bash
+python3 voice_design_clone.py --output_dir personality_1
+python3 voice_clone.py --output_dir personality_1
+```
 
-### 1) CUDA out of memory
+The script also accepts a legacy freeform style:
 
-- Reduce model size (if available).
-- Close other GPU-heavy processes.
-- Try lower memory settings or a different attention backend.
+```bash
+python3 voice_design_clone.py -- output_dir personality 1
+python3 voice_clone.py -- output_dir personality 1
+```
 
-### 2) FlashAttention errors
+Both commands save into `output/personality_1/`.
 
-- Install `flash-attn` compatible with your CUDA/PyTorch versions.
-- Or set `attn_implementation` to `"eager"`.
+## Current Structure
 
-### 3) Emotion mapping validation error
+```text
+emotional-tts/
+  README.md
+  requirements.txt
+  voice_design_clone.py
+  voice_clone.py
+  voice_personality_config.py
+  voice_clone_ref/
+  output/
+```
 
-If you get errors like `keys must match emotion_order`, ensure all emotion dictionaries use exactly the same keys as `emotion_order`.
+## Common Issues
 
-### 4) Audio writing issues
+1. CUDA out-of-memory error
+  Reduce GPU load or free GPU processes.
 
-Ensure `soundfile` is installed correctly and your environment has required system audio libraries.
+2. FlashAttention error
+  Install a compatible `flash-attn` version or set `attn_implementation = "eager"`.
 
-## Reproducibility Tips
+3. Emotion mapping validation error
+  Ensure emotion keys are identical across all dictionaries.
 
-- Keep `requirements.txt` pinned (already included).
-- Commit exact script changes together with output naming conventions.
-- Document GPU, CUDA, and driver versions in your GitHub release notes.
+4. Audio read/write error
+  Check `soundfile` installation and required system audio libraries.
 
-## License
+## Licenses
 
-This repository content is your project code. The referenced models and third-party packages are governed by their own licenses:
-
-- Qwen3-TTS model/package licenses
-- PyTorch, Transformers, and other dependency licenses
-
-Review each upstream license before production or commercial use.
+The project code is yours. External models and dependencies are governed by their own licenses.
