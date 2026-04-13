@@ -19,6 +19,7 @@ class ModelConfig:
     device_map: str = "cuda:0"
     dtype: torch.dtype = torch.bfloat16
     attn_implementation: str = "flash_attention_2"
+    voice_design_seed: int = 42
 
 
 # Data contract for emotion-conditioned generation.
@@ -26,8 +27,9 @@ class ModelConfig:
 class GenerationData:
     # Defines the canonical order used when iterating over emotions.
     emotion_order: List[str]
-    # Maps each emotion to the exact style instruction used to build references.
-    ref_instruct_by_emotion: Dict[str, str]
+    # Maps each emotion to language-specific style instructions used to build references.
+    ref_instruct_en_by_emotion: Dict[str, str]
+    ref_instruct_es_by_emotion: Dict[str, str]
     # Per-emotion reference transcripts used in design and clone prompt creation.
     voice_design_ref_text_en_by_emotion: Dict[str, str]
     voice_design_ref_text_es_by_emotion: Dict[str, str]
@@ -61,7 +63,8 @@ class VoiceDesignClonePipeline:
         # Process each emotion independently to keep prompt/style alignment explicit.
         for emotion in self.data.emotion_order:
             emotion_tag = self._file_tag(emotion)
-            instruct = self.data.ref_instruct_by_emotion[emotion]
+            ref_instruct_en = self.data.ref_instruct_en_by_emotion[emotion]
+            ref_instruct_es = self.data.ref_instruct_es_by_emotion[emotion]
             ref_text_en = self.data.voice_design_ref_text_en_by_emotion[emotion]
             ref_text_es = self.data.voice_design_ref_text_es_by_emotion[emotion]
 
@@ -70,14 +73,14 @@ class VoiceDesignClonePipeline:
                 model=design_model,
                 text=ref_text_en,
                 language="English",
-                instruct=instruct,
+                instruct=ref_instruct_en,
                 out_path=self.ref_dir / f"voice_design_ref_en_{emotion_tag}.wav",
             )
             ref_wav_es, _ = self._generate_ref_audio(
                 model=design_model,
                 text=ref_text_es,
                 language="Spanish",
-                instruct=instruct,
+                instruct=ref_instruct_es,
                 out_path=self.ref_dir / f"voice_design_ref_es_{emotion_tag}.wav",
             )
 
@@ -129,8 +132,10 @@ class VoiceDesignClonePipeline:
             "instructions_by_emotion:",
         ]
         for emotion in self.data.emotion_order:
-            instruct = self.data.ref_instruct_by_emotion[emotion]
-            lines.append(f"- {emotion}: {instruct}")
+            ref_instruct_en = self.data.ref_instruct_en_by_emotion[emotion]
+            ref_instruct_es = self.data.ref_instruct_es_by_emotion[emotion]
+            lines.append(f"- {emotion} [English]: {ref_instruct_en}")
+            lines.append(f"- {emotion} [Spanish]: {ref_instruct_es}")
         personality_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _load_voice_design_model(self) -> Qwen3TTSModel:
@@ -160,6 +165,7 @@ class VoiceDesignClonePipeline:
         out_path: Path,
     ) -> Tuple[np.ndarray, int]:
         # Generate one reference waveform and persist it for traceability/reuse.
+        self._set_voice_design_seed()
         wavs, sample_rate = model.generate_voice_design(
             text=text,
             language=language,
@@ -167,6 +173,14 @@ class VoiceDesignClonePipeline:
         )
         sf.write(str(out_path), wavs[0], sample_rate)
         return wavs[0], sample_rate
+
+    def _set_voice_design_seed(self) -> None:
+        # Freeze randomness right before voice design generation for reproducibility.
+        seed_value = self.config.voice_design_seed
+        torch.manual_seed(seed_value)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed_value)
+        np.random.seed(seed_value)
 
     def _build_clone_prompt(
         self,
@@ -200,8 +214,10 @@ class VoiceDesignClonePipeline:
     def _validate_emotion_maps(self) -> None:
         # All emotion-indexed maps must share exactly the same key set.
         base = set(self.data.emotion_order)
-        if set(self.data.ref_instruct_by_emotion.keys()) != base:
-            raise ValueError("ref_instruct_by_emotion keys must match emotion_order")
+        if set(self.data.ref_instruct_en_by_emotion.keys()) != base:
+            raise ValueError("ref_instruct_en_by_emotion keys must match emotion_order")
+        if set(self.data.ref_instruct_es_by_emotion.keys()) != base:
+            raise ValueError("ref_instruct_es_by_emotion keys must match emotion_order")
         if set(self.data.voice_design_ref_text_en_by_emotion.keys()) != base:
             raise ValueError("voice_design_ref_text_en_by_emotion keys must match emotion_order")
         if set(self.data.voice_design_ref_text_es_by_emotion.keys()) != base:
@@ -222,7 +238,8 @@ def build_default_data() -> GenerationData:
     generation_config = build_default_generation_config()
     return GenerationData(
         emotion_order=generation_config["emotion_order"],
-        ref_instruct_by_emotion=generation_config["ref_instruct_by_emotion"],
+        ref_instruct_en_by_emotion=generation_config["ref_instruct_en_by_emotion"],
+        ref_instruct_es_by_emotion=generation_config["ref_instruct_es_by_emotion"],
         voice_design_ref_text_en_by_emotion=generation_config[
             "voice_design_ref_text_en_by_emotion"
         ],

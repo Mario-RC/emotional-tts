@@ -3,6 +3,8 @@ from typing import Dict, List, TypedDict
 
 class GenerationDefaults(TypedDict):
     emotion_order: List[str]
+    ref_instruct_en_by_emotion: Dict[str, str]
+    ref_instruct_es_by_emotion: Dict[str, str]
     ref_instruct_by_emotion: Dict[str, str]
     voice_design_ref_text_en_by_emotion: Dict[str, str]
     voice_design_ref_text_es_by_emotion: Dict[str, str]
@@ -16,24 +18,39 @@ class GenerationDefaults(TypedDict):
 # Folder label used to group outputs for this personality preset.
 DEFAULT_PERSONALITY_FOLDER = "personality_1"
 
+BASE_IDENTITY_EN = BASE_IDENTITY_ES = ("Voice: 8-year-old boy. Acoustic profile: smooth low-pitch, clear and crisp articulation.")
 
-# Base identity descriptor shared by all emotion instructions.
-BASE_IDENTITY = "Voice of a 30-year-old man, AI assistant"
-
+# BASE_IDENTITY_EN = BASE_IDENTITY_ES = (
+#     "Voice of a 20-year-old male teenager, strict native Spanish speaker from Madrid, Spain with a clear Castilian accent. "
+#     "Friendly, playful, and warm robot companion for kids. "
+#     "Acoustic profile: bright mid-pitch voice, energetic rhythm. "
+#     "Phonetics: perfectly rolled Spanish 'r' (alveolar trill), pure and sharp 'o' vowels without any English diphthongs, "
+#     "crisp native articulation. Sweet, endearing timbre, and highly expressive."
+# )
 
 # Emotion-specific personality/style traits used to build reference instructions.
 PERSONALITY_TRAITS_BY_EMOTION: Dict[str, str] = {
-    "anger": "robot companion. Clear articulation. Speaks with an angry, stern, and frustrated tone. Sharp delivery, loud, and lacking patience.",
-    "disgust": "robot companion. Clear articulation. Speaks with a disgusted, repulsed, and uncomfortable tone. Expressing strong aversion and dislike.",
-    "fear": "robot companion. Clear articulation. Speaks with a terrified, panicked, and trembling tone. Breathless and stuttering delivery, expressing extreme fear, distress, and high anxiety.",
-    "happiness": "friendly and warm robot companion. Clear articulation. Speaks with a very happy, excited, and cheerful tone. Bright, enthusiastic, and highly engaging.",
-    "neutral": "helpful robot companion. Clear articulation. Speaks with a neutral, calm, and composed tone. Even pacing, informative, without strong emotion.",
-    "sadness": "empathetic robot companion. Clear articulation. Speaks with a heartbroken, devastated, and tearful tone. Voice cracking with deep grief, very slow pacing, heavy sighs, expressing profound sorrow and despair.",
-    "surprise": "expressive robot companion. Clear articulation. Speaks with a highly surprised, astonished, and amazed tone. Wide-eyed, breathless, and sudden energy.",
+    "anger": "Tone: angry.",
+    "disgust": "Tone: disgusted.",
+    "fear": "Tone: terrified.",
+    "happiness": "Tone: very happy.",
+    "neutral": "Tone: neutral.",
+    "sadness": "Tone: very sad.",
+    "surprise": "Tone: surprised.",
 }
 
+# PERSONALITY_TRAITS_BY_EMOTION: Dict[str, str] = {
+#     "anger": "Speaks with an angry, stern, and frustrated tone. Sharp delivery, loud, and lacking patience.",
+#     "disgust": "Speaks with a disgusted, repulsed, and uncomfortable tone. Expressing strong aversion and dislike.",
+#     "fear": "Speaks with a terrified, panicked, and trembling tone. Breathless and stuttering delivery, expressing extreme fear, distress, and high anxiety.",
+#     "happiness": "Speaks with a very happy, excited, and cheerful tone. Bright, enthusiastic, and highly engaging.",
+#     "neutral": "Speaks with a neutral, calm, and composed tone. Even pacing, informative, without strong emotion.",
+#     "sadness": "Speaks with a heartbroken, devastated, and tearful tone. Voice cracking with deep grief, very slow pacing, heavy sighs, expressing profound sorrow and despair.",
+#     "surprise": "Speaks with a highly surprised, astonished, and amazed tone. Wide-eyed, breathless, and sudden energy.",
+# }
 
-def build_ref_instruct_by_emotion(base_identity: str = BASE_IDENTITY) -> Dict[str, str]:
+
+def build_ref_instruct_by_emotion(base_identity: str) -> Dict[str, str]:
     # Compose final per-emotion instructions from identity + personality traits.
     return {
         emotion: f"{base_identity}, {traits}"
@@ -53,12 +70,20 @@ DEFAULT_EMOTION_ORDER: List[str] = [
 ]
 
 
-# Base transcripts used as defaults for all emotions.
 BASE_VOICE_DESIGN_REF_TEXT_EN = (
-    "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it."
+    "Hello. I believe we have an exceptionally thorough plan to begin our tasks this morning. "
+    "As we move forward, I find it incredibly rewarding to analyze complex variables, "
+    "measure our progress with precision, and adapt to any sudden changes. "
+    "Whether we are brainstorming creative solutions or evaluating detailed technical specifications, "
+    "I am always right here, fully prepared to support you every step of the way."
 )
+
 BASE_VOICE_DESIGN_REF_TEXT_ES = (
-    "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites."
+    "Hola, ¿qué tal? Me parece que ya tenemos todo listo para arrancar con nuestra jornada. "
+    "La verdad es que disfruto muchísimo gestionando este tipo de proyectos; me permite analizar "
+    "cada detalle con absoluta precisión, organizar las tareas más complejas de forma eficaz, "
+    "y garantizar que el desarrollo sea perfecto. Pase lo que pase, puedes tener la certeza "
+    "de que siempre estaré a tu entera disposición para resolver cualquier duda que surja."
 )
 
 # Per-emotion transcripts used by voice_design_clone.py to generate refs and build clone prompts.
@@ -78,35 +103,35 @@ VOICE_DESIGN_REF_TEXT_ES_BY_EMOTION: Dict[str, str] = {
 # - voice_clone_ref_es_<emotion>.wav
 VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION: Dict[str, str] = {
     # Replace with the exact transcript for voice_clone_ref_en_anger.wav
-    "anger": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "anger": BASE_VOICE_DESIGN_REF_TEXT_EN,
     # Replace with the exact transcript for voice_clone_ref_en_disgust.wav
-    "disgust": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "disgust": BASE_VOICE_DESIGN_REF_TEXT_EN,
     # Replace with the exact transcript for voice_clone_ref_en_fear.wav
-    "fear": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "fear": BASE_VOICE_DESIGN_REF_TEXT_EN,
     # Replace with the exact transcript for voice_clone_ref_en_happiness.wav
-    "happiness": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "happiness": BASE_VOICE_DESIGN_REF_TEXT_EN,
     # Replace with the exact transcript for voice_clone_ref_en_neutral.wav
-    "neutral": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "neutral": BASE_VOICE_DESIGN_REF_TEXT_EN,
     # Replace with the exact transcript for voice_clone_ref_en_sadness.wav
-    "sadness": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "sadness": BASE_VOICE_DESIGN_REF_TEXT_EN,
     # Replace with the exact transcript for voice_clone_ref_en_surprise.wav
-    "surprise": "Hello. I think we have a solid plan to start our work today. I enjoy exploring new ideas, figuring out complex details, and simply being here to assist you whenever you need it.",
+    "surprise": BASE_VOICE_DESIGN_REF_TEXT_EN,
 }
 VOICE_CLONE_REFS_TEXT_ES_BY_EMOTION: Dict[str, str] = {
     # Replace with the exact transcript for voice_clone_ref_es_anger.wav
-    "anger": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "anger": BASE_VOICE_DESIGN_REF_TEXT_ES,
     # Replace with the exact transcript for voice_clone_ref_es_disgust.wav
-    "disgust": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "disgust": BASE_VOICE_DESIGN_REF_TEXT_ES,
     # Replace with the exact transcript for voice_clone_ref_es_fear.wav
-    "fear": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "fear": BASE_VOICE_DESIGN_REF_TEXT_ES,
     # Replace with the exact transcript for voice_clone_ref_es_happiness.wav
-    "happiness": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "happiness": BASE_VOICE_DESIGN_REF_TEXT_ES,
     # Replace with the exact transcript for voice_clone_ref_es_neutral.wav
-    "neutral": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "neutral": BASE_VOICE_DESIGN_REF_TEXT_ES,
     # Replace with the exact transcript for voice_clone_ref_es_sadness.wav
-    "sadness": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "sadness": BASE_VOICE_DESIGN_REF_TEXT_ES,
     # Replace with the exact transcript for voice_clone_ref_es_surprise.wav
-    "surprise": "Hola. Creo que tenemos un buen plan para comenzar nuestro trabajo hoy. Disfruto explorando nuevas ideas, resolviendo detalles complejos, y simplemente estando aquí para ayudarte cuando lo necesites.",
+    "surprise": BASE_VOICE_DESIGN_REF_TEXT_ES,
 }
 
 
@@ -134,9 +159,14 @@ DEFAULT_SENTENCES_ES_BY_EMOTION: Dict[str, str] = {
 
 def build_default_generation_config() -> GenerationDefaults:
     # Keep all generation defaults centralized in one place.
+    ref_instruct_en_by_emotion = build_ref_instruct_by_emotion(BASE_IDENTITY_EN)
+    ref_instruct_es_by_emotion = build_ref_instruct_by_emotion(BASE_IDENTITY_ES)
     return {
         "emotion_order": DEFAULT_EMOTION_ORDER,
-        "ref_instruct_by_emotion": build_ref_instruct_by_emotion(),
+        "ref_instruct_en_by_emotion": ref_instruct_en_by_emotion,
+        "ref_instruct_es_by_emotion": ref_instruct_es_by_emotion,
+        # Backward-compatible default for older consumers expecting a single map.
+        "ref_instruct_by_emotion": ref_instruct_en_by_emotion,
         "voice_design_ref_text_en_by_emotion": VOICE_DESIGN_REF_TEXT_EN_BY_EMOTION,
         "voice_design_ref_text_es_by_emotion": VOICE_DESIGN_REF_TEXT_ES_BY_EMOTION,
         "voice_clone_refs_text_en_by_emotion": VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION,

@@ -52,7 +52,7 @@ Script: `voice_design_clone.py`
 ### What It Does
 
 1. Loads VoiceDesign model: `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
-2. Loads Base model for cloning: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
+2. Loads Base model for cloning: `Qwen/Qwen3-TTS-12Hz-1.7B-Base` or `Qwen/Qwen3-TTS-12Hz-0.6B-Base`
 3. For each emotion:
 4. Generates EN and ES references from personality instructions.
 5. Builds a voice-clone prompt from each reference.
