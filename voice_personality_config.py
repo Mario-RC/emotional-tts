@@ -99,8 +99,8 @@ VOICE_DESIGN_REF_TEXT_ES_BY_EMOTION: Dict[str, str] = {
 
 # Per-emotion transcripts used by voice_clone.py for uploaded refs and clone prompts.
 # Fill these with the exact transcript of each uploaded audio file:
-# - voice_clone_ref_en_<emotion>.wav
-# - voice_clone_ref_es_<emotion>.wav
+# - artifacts/<personality>/ref/voice_clone_ref/voice_clone_ref_en_<emotion>.wav
+# - artifacts/<personality>/ref/voice_clone_ref/voice_clone_ref_es_<emotion>.wav
 VOICE_CLONE_REFS_TEXT_EN_BY_EMOTION: Dict[str, str] = {
     # Replace with the exact transcript for voice_clone_ref_en_anger.wav
     "anger": BASE_VOICE_DESIGN_REF_TEXT_EN,

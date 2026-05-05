@@ -2,13 +2,14 @@ import argparse
 from dataclasses import dataclass, replace
 from pathlib import Path
 from shutil import copy2
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel
 
+from utils import SilenceTrimConfig, trim_silence
 from voice_personality_config import build_default_generation_config
 
 
@@ -18,6 +19,9 @@ class ModelConfig:
     device_map: str = "cuda:0"
     dtype: torch.dtype = torch.bfloat16
     attn_implementation: str = "flash_attention_2"
+    trim_clone_silence: bool = True
+    clone_silence_threshold: float = 0.003
+    clone_silence_padding_ms: int = 80
 
 
 @dataclass(frozen=True)
@@ -31,14 +35,19 @@ class GenerationData:
 
 
 class UploadedRefsClonePipeline:
-    def __init__(self, config: ModelConfig, data: GenerationData) -> None:
+    def __init__(
+        self,
+        config: ModelConfig,
+        data: GenerationData,
+        input_ref_dir: Optional[Path] = None,
+    ) -> None:
         self.config = config
         self.data = data
-        self.input_ref_dir = Path("voice_clone_ref")
-        self.output_root_dir = Path("output")
-        self.personality_dir = self.output_root_dir / self.data.personality_folder
-        self.output_ref_dir = self.personality_dir / "voice_clone_ref"
-        self.clone_dir = self.personality_dir / "clones"
+        self.artifacts_root_dir = Path("artifacts")
+        self.personality_dir = self.artifacts_root_dir / self.data.personality_folder
+        self.output_ref_dir = self.personality_dir / "ref" / "voice_clone_ref"
+        self.input_ref_dir = Path(input_ref_dir) if input_ref_dir else self.output_ref_dir
+        self.generated_speech_dir = self.personality_dir / "generated_speech" / "voice_clone"
 
     def run(self) -> None:
         self._ensure_output_dirs()
@@ -75,21 +84,21 @@ class UploadedRefsClonePipeline:
                 text=self.data.sentences_en_by_emotion[emotion],
                 language="English",
                 voice_clone_prompt=voice_clone_prompt_en,
-                out_file=self.clone_dir / f"clone_en_{emotion_tag}.wav",
+                out_file=self.generated_speech_dir / f"clone_en_{emotion_tag}.wav",
             )
             self._generate_single_clone(
                 clone_model=clone_model,
                 text=self.data.sentences_es_by_emotion[emotion],
                 language="Spanish",
                 voice_clone_prompt=voice_clone_prompt_es,
-                out_file=self.clone_dir / f"clone_es_{emotion_tag}.wav",
+                out_file=self.generated_speech_dir / f"clone_es_{emotion_tag}.wav",
             )
 
     def _ensure_output_dirs(self) -> None:
-        self.output_root_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_root_dir.mkdir(parents=True, exist_ok=True)
         self.output_ref_dir.mkdir(parents=True, exist_ok=True)
         self.personality_dir.mkdir(parents=True, exist_ok=True)
-        self.clone_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_speech_dir.mkdir(parents=True, exist_ok=True)
 
     def _validate_emotion_maps(self) -> None:
         base = set(self.data.emotion_order)
@@ -116,7 +125,8 @@ class UploadedRefsClonePipeline:
         if missing_files:
             missing_text = "\n".join(missing_files)
             raise FileNotFoundError(
-                "Missing reference audios. Upload the files to 'voice_clone_ref/' with these names:\n"
+                "Missing reference audios. Upload the files to 'artifacts/<personality>/ref/voice_clone_ref/' "
+                "or pass --ref_dir with these names:\n"
                 f"{missing_text}"
             )
 
@@ -126,6 +136,8 @@ class UploadedRefsClonePipeline:
             for language in ("en", "es"):
                 source = self.input_ref_dir / f"voice_clone_ref_{language}_{emotion_tag}.wav"
                 destination = self.output_ref_dir / source.name
+                if source.resolve() == destination.resolve():
+                    continue
                 copy2(source, destination)
 
     def _write_personality_file(self) -> None:
@@ -133,8 +145,8 @@ class UploadedRefsClonePipeline:
         lines = [
             "pipeline: voice_clone",
             f"personality_folder: {self.data.personality_folder}",
-            f"output_folder: {self.personality_dir}",
-            f"clone_folder: {self.clone_dir}",
+            f"artifacts_folder: {self.personality_dir}",
+            f"generated_speech_folder: {self.generated_speech_dir}",
             f"ref_folder: {self.output_ref_dir}",
             f"input_ref_dir: {self.input_ref_dir}",
             "ref_en_files_by_emotion:",
@@ -188,7 +200,29 @@ class UploadedRefsClonePipeline:
             language=language,
             voice_clone_prompt=voice_clone_prompt,
         )
-        sf.write(str(out_file), wavs[0], sample_rate)
+        wav, trim_info = trim_silence(
+            wavs[0],
+            sample_rate,
+            SilenceTrimConfig(
+                enabled=self.config.trim_clone_silence,
+                threshold=self.config.clone_silence_threshold,
+                padding_ms=self.config.clone_silence_padding_ms,
+            ),
+        )
+        if (
+            trim_info["trim_removed_start_seconds"] > 0.0
+            or trim_info["trim_removed_end_seconds"] > 0.0
+        ):
+            print(
+                (
+                    f"Trimmed cloned audio silence for {out_file.stem}: "
+                    f"start={trim_info['trim_removed_start_seconds']:.3f}s, "
+                    f"end={trim_info['trim_removed_end_seconds']:.3f}s, "
+                    f"elapsed={trim_info['trim_elapsed_seconds']:.4f}s"
+                ),
+                flush=True,
+            )
+        sf.write(str(out_file), wav, sample_rate)
 
     @staticmethod
     def _file_tag(emotion: str) -> str:
@@ -219,9 +253,40 @@ def _parse_args() -> argparse.Namespace:
         dest="output_dir",
         nargs="+",
         help=(
-            "Output folder name under output/. "
+            "Personality folder name under artifacts/. "
             "Example: --output_dir personality_3"
         ),
+    )
+    parser.add_argument(
+        "--ref_dir",
+        "--ref-dir",
+        dest="ref_dir",
+        help=(
+            "Folder containing reference wav files named "
+            "voice_clone_ref_<en|es>_<emotion>.wav. Defaults to "
+            "artifacts/<personality>/ref/voice_clone_ref/."
+        ),
+    )
+    parser.add_argument(
+        "--ref_text",
+        "--ref-text",
+        dest="ref_text",
+        help=(
+            "Transcript shared by all reference audios. "
+            "Use --ref_text_en/--ref_text_es to override per language."
+        ),
+    )
+    parser.add_argument(
+        "--ref_text_en",
+        "--ref-text-en",
+        dest="ref_text_en",
+        help="Transcript shared by the English reference audios.",
+    )
+    parser.add_argument(
+        "--ref_text_es",
+        "--ref-text-es",
+        dest="ref_text_es",
+        help="Transcript shared by the Spanish reference audios.",
     )
     # Accepts legacy freeform usage like: python3 voice_clone.py -- output_dir personality 3
     parser.add_argument("legacy_output_dir", nargs="*")
@@ -254,8 +319,28 @@ def main() -> None:
     output_folder_override = _resolve_output_folder(args)
     if output_folder_override:
         data = replace(data, personality_folder=output_folder_override)
+    ref_text_en = args.ref_text_en or args.ref_text
+    ref_text_es = args.ref_text_es or args.ref_text
+    if ref_text_en:
+        data = replace(
+            data,
+            voice_clone_refs_text_en_by_emotion={
+                emotion: ref_text_en for emotion in data.emotion_order
+            },
+        )
+    if ref_text_es:
+        data = replace(
+            data,
+            voice_clone_refs_text_es_by_emotion={
+                emotion: ref_text_es for emotion in data.emotion_order
+            },
+        )
 
-    pipeline = UploadedRefsClonePipeline(config=ModelConfig(), data=data)
+    pipeline = UploadedRefsClonePipeline(
+        config=ModelConfig(),
+        data=data,
+        input_ref_dir=Path(args.ref_dir) if args.ref_dir else None,
+    )
     pipeline.run()
 
 

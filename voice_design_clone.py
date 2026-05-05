@@ -8,6 +8,7 @@ import soundfile as sf
 import torch
 from qwen_tts import Qwen3TTSModel
 
+from utils import SilenceTrimConfig, trim_silence
 from voice_personality_config import build_default_generation_config
 
 
@@ -20,6 +21,12 @@ class ModelConfig:
     dtype: torch.dtype = torch.bfloat16
     attn_implementation: str = "flash_attention_2"
     voice_design_seed: int = 42
+    trim_ref_silence: bool = True
+    ref_silence_threshold: float = 0.003
+    ref_silence_padding_ms: int = 80
+    trim_clone_silence: bool = True
+    clone_silence_threshold: float = 0.003
+    clone_silence_padding_ms: int = 80
 
 
 # Data contract for emotion-conditioned generation.
@@ -45,10 +52,10 @@ class VoiceDesignClonePipeline:
     def __init__(self, config: ModelConfig, data: GenerationData) -> None:
         self.config = config
         self.data = data
-        self.output_root_dir = Path("output")
-        self.personality_dir = self.output_root_dir / self.data.personality_folder
-        self.ref_dir = self.personality_dir / "voice_design_clone_ref"
-        self.clone_dir = self.personality_dir / "clones"
+        self.artifacts_root_dir = Path("artifacts")
+        self.personality_dir = self.artifacts_root_dir / self.data.personality_folder
+        self.ref_dir = self.personality_dir / "ref" / "voice_design_clone_ref"
+        self.generated_speech_dir = self.personality_dir / "generated_speech" / "voice_design_clone"
 
     def run(self) -> None:
         # Prepare filesystem and fail fast if emotion maps are inconsistent.
@@ -76,7 +83,7 @@ class VoiceDesignClonePipeline:
                 instruct=ref_instruct_en,
                 out_path=self.ref_dir / f"voice_design_ref_en_{emotion_tag}.wav",
             )
-            ref_wav_es, _ = self._generate_ref_audio(
+            ref_wav_es, sr_es = self._generate_ref_audio(
                 model=design_model,
                 text=ref_text_es,
                 language="Spanish",
@@ -94,7 +101,7 @@ class VoiceDesignClonePipeline:
             voice_clone_prompt_es = self._build_clone_prompt(
                 clone_model=clone_model,
                 ref_wav=ref_wav_es,
-                sample_rate=sr,
+                sample_rate=sr_es,
                 ref_text=ref_text_es,
             )
 
@@ -104,21 +111,21 @@ class VoiceDesignClonePipeline:
                 text=self.data.sentences_en_by_emotion[emotion],
                 language="English",
                 voice_clone_prompt=voice_clone_prompt_en,
-                out_file=self.clone_dir / f"clone_en_{emotion_tag}.wav",
+                out_file=self.generated_speech_dir / f"design_clone_en_{emotion_tag}.wav",
             )
             self._generate_single_clone(
                 clone_model=clone_model,
                 text=self.data.sentences_es_by_emotion[emotion],
                 language="Spanish",
                 voice_clone_prompt=voice_clone_prompt_es,
-                out_file=self.clone_dir / f"clone_es_{emotion_tag}.wav",
+                out_file=self.generated_speech_dir / f"design_clone_es_{emotion_tag}.wav",
             )
 
     def _ensure_output_dirs(self) -> None:
         # Ensure personality folders exist before any write operation.
-        self.output_root_dir.mkdir(parents=True, exist_ok=True)
+        self.artifacts_root_dir.mkdir(parents=True, exist_ok=True)
         self.ref_dir.mkdir(parents=True, exist_ok=True)
-        self.clone_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_speech_dir.mkdir(parents=True, exist_ok=True)
 
     def _write_personality_file(self) -> None:
         # Persist the exact personality instructions used for this execution.
@@ -126,8 +133,8 @@ class VoiceDesignClonePipeline:
         lines = [
             "pipeline: voice_design_clone",
             f"personality_folder: {self.data.personality_folder}",
-            f"output_folder: {self.personality_dir}",
-            f"clone_folder: {self.clone_dir}",
+            f"artifacts_folder: {self.personality_dir}",
+            f"generated_speech_folder: {self.generated_speech_dir}",
             f"ref_folder: {self.ref_dir}",
             "instructions_by_emotion:",
         ]
@@ -171,8 +178,43 @@ class VoiceDesignClonePipeline:
             language=language,
             instruct=instruct,
         )
-        sf.write(str(out_path), wavs[0], sample_rate)
-        return wavs[0], sample_rate
+        wav = self._trim_audio_silence(
+            wav=wavs[0],
+            sample_rate=sample_rate,
+            label=out_path.stem,
+            kind="reference",
+            config=SilenceTrimConfig(
+                enabled=self.config.trim_ref_silence,
+                threshold=self.config.ref_silence_threshold,
+                padding_ms=self.config.ref_silence_padding_ms,
+            ),
+        )
+        sf.write(str(out_path), wav, sample_rate)
+        return wav, sample_rate
+
+    @staticmethod
+    def _trim_audio_silence(
+        wav: np.ndarray,
+        sample_rate: int,
+        label: str,
+        kind: str,
+        config: SilenceTrimConfig,
+    ) -> np.ndarray:
+        trimmed_wav, trim_info = trim_silence(wav, sample_rate, config)
+        if (
+            trim_info["trim_removed_start_seconds"] > 0.0
+            or trim_info["trim_removed_end_seconds"] > 0.0
+        ):
+            print(
+                (
+                    f"Trimmed {kind} silence for {label}: "
+                    f"start={trim_info['trim_removed_start_seconds']:.3f}s, "
+                    f"end={trim_info['trim_removed_end_seconds']:.3f}s, "
+                    f"elapsed={trim_info['trim_elapsed_seconds']:.4f}s"
+                ),
+                flush=True,
+            )
+        return trimmed_wav
 
     def _set_voice_design_seed(self) -> None:
         # Freeze randomness right before voice design generation for reproducibility.
@@ -209,7 +251,18 @@ class VoiceDesignClonePipeline:
             language=language,
             voice_clone_prompt=voice_clone_prompt,
         )
-        sf.write(str(out_file), wavs[0], sample_rate)
+        wav = self._trim_audio_silence(
+            wav=wavs[0],
+            sample_rate=sample_rate,
+            label=out_file.stem,
+            kind="cloned audio",
+            config=SilenceTrimConfig(
+                enabled=self.config.trim_clone_silence,
+                threshold=self.config.clone_silence_threshold,
+                padding_ms=self.config.clone_silence_padding_ms,
+            ),
+        )
+        sf.write(str(out_file), wav, sample_rate)
 
     def _validate_emotion_maps(self) -> None:
         # All emotion-indexed maps must share exactly the same key set.
@@ -260,7 +313,7 @@ def _parse_args() -> argparse.Namespace:
         dest="output_dir",
         nargs="+",
         help=(
-            "Output folder name under output/. "
+            "Personality folder name under artifacts/. "
             "Example: --output_dir personality"
         ),
     )
