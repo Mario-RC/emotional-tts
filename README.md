@@ -525,6 +525,8 @@ emotional-tts/
 
 This project builds on top of [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS), used via the `qwen-tts` package and the `Qwen/Qwen3-TTS-*` models on Hugging Face.
 
-## Licenses
+## License
 
-The project code is yours. External models and dependencies are governed by their own licenses.
+The project code is licensed under the MIT License. See `LICENSE`.
+
+External models and dependencies are governed by their own licenses.
