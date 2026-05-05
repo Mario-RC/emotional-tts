@@ -27,8 +27,7 @@ Thumbs.db
 .idea/
 
 # Generated audio artifacts
-output/
-ref/
+artifacts/
 *.wav
 *.flac
 *.mp3
