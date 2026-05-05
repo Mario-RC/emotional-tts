@@ -1,4 +1,4 @@
-# Emotional TTS (Qwen3-TTS)
+# Emotional TTS
 
 This project contains two main pipelines to generate emotion-aware audio in English and Spanish.
 
@@ -207,6 +207,10 @@ emotional-tts/
 
 4. Audio read/write error
   Check `soundfile` installation and required system audio libraries.
+
+## Acknowledgments
+
+This repository contains custom project code together with local copies of [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS).
 
 ## Licenses
 
