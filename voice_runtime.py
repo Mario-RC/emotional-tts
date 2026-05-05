@@ -7,7 +7,7 @@ is loaded — no VoiceDesign pass at runtime.
 Two modes:
 
 - One-shot:
-    python voice_runtime.py --text "Hola" --language Spanish --emotion happiness --output voice_runtime_es_happiness.wav
+    python voice_runtime.py --text "Hola" --language Spanish --emotion happiness
 
 - Hot server (model stays loaded, read JSON requests from stdin):
     python voice_runtime.py --serve --preload-all --warmup
@@ -80,6 +80,12 @@ DEFAULT_REF_TEXT_BY_LANG = {
 REF_FILE_PREFIXES = ("voice_design_ref", "voice_clone_ref")
 DEFAULT_LATENCY_PRESET = "fast"
 MAX_BATCH_TEXTS = 3
+RUNTIME_OUTPUT_FILENAMES = tuple(
+    f"voice_runtime_{index}.wav" for index in range(1, MAX_BATCH_TEXTS + 1)
+)
+RUNTIME_COMBINED_FILENAME = "voice_runtime.wav"
+RUNTIME_SLOT_FILENAMES = frozenset((*RUNTIME_OUTPUT_FILENAMES, RUNTIME_COMBINED_FILENAME))
+RUNTIME_PLACEHOLDER_SAMPLE_RATE = 24000
 COMBINED_OUTPUT_PAUSE_MS = 250
 MIN_MAX_NEW_TOKENS = 96
 MIN_MAX_NEW_TOKENS_PER_CHAR = 4
@@ -220,7 +226,6 @@ class EmotionalSpeaker:
             raise ValueError(f"Batch output mismatch: wavs={len(wavs)}, paths={len(out_paths)}")
 
         output_items = []
-        total_trim_elapsed = 0.0
         total_trim_start = 0.0
         total_trim_end = 0.0
         trimmed_wavs = []
@@ -228,8 +233,7 @@ class EmotionalSpeaker:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             trimmed_wav, trim_info = trim_silence(wav, sample_rate, CLONED_AUDIO_TRIM_CONFIG)
             trimmed_wavs.append(trimmed_wav)
-            self._write_wav_atomic(out_path, trimmed_wav, sample_rate)
-            total_trim_elapsed += trim_info["trim_elapsed_seconds"]
+            self._write_wav(out_path, trimmed_wav, sample_rate)
             total_trim_start += trim_info["trim_removed_start_seconds"]
             total_trim_end += trim_info["trim_removed_end_seconds"]
             output_items.append(
@@ -237,7 +241,6 @@ class EmotionalSpeaker:
                     "index": index,
                     "output": str(out_path),
                     "emotion": emotions[index - 1],
-                    "trim_elapsed_seconds": trim_info["trim_elapsed_seconds"],
                     "trim_removed_start_seconds": trim_info["trim_removed_start_seconds"],
                     "trim_removed_end_seconds": trim_info["trim_removed_end_seconds"],
                 }
@@ -247,7 +250,7 @@ class EmotionalSpeaker:
         if len(trimmed_wavs) > 1:
             combined_path = self._resolve_combined_output(output, lang, emotions)
             combined_path.parent.mkdir(parents=True, exist_ok=True)
-            self._write_wav_atomic(
+            self._write_wav(
                 combined_path,
                 self._concat_with_pause(trimmed_wavs, sample_rate),
                 sample_rate,
@@ -259,7 +262,6 @@ class EmotionalSpeaker:
         effective_generation_options["emotions"] = emotions
         effective_generation_options["items"] = output_items
         effective_generation_options["combined_output"] = str(combined_path) if combined_path else None
-        effective_generation_options["trim_elapsed_seconds"] = total_trim_elapsed
         effective_generation_options["trim_removed_start_seconds"] = total_trim_start
         effective_generation_options["trim_removed_end_seconds"] = total_trim_end
         return [str(path) for path in out_paths], effective_generation_options
@@ -304,14 +306,8 @@ class EmotionalSpeaker:
         language: str,
         emotions: List[str],
     ) -> List[Path]:
-        code = LANG_TO_CODE[language]
         count = len(emotions)
-        runtime_names = [
-            f"voice_runtime_{code}_{emotions[index - 1]}.wav"
-            if count == 1
-            else f"voice_runtime_{code}_{emotions[index - 1]}_{index}.wav"
-            for index in range(1, count + 1)
-        ]
+        runtime_names = list(RUNTIME_OUTPUT_FILENAMES[:count])
         if output:
             out_path = Path(output)
             if out_path.is_absolute():
@@ -332,8 +328,7 @@ class EmotionalSpeaker:
         language: str,
         emotions: List[str],
     ) -> Path:
-        code = LANG_TO_CODE[language]
-        combined_name = f"voice_runtime_{code}_{'_'.join(emotions)}.wav"
+        combined_name = RUNTIME_COMBINED_FILENAME
         if output:
             out_path = Path(output)
             if out_path.is_absolute():
@@ -406,6 +401,13 @@ class EmotionalSpeaker:
                 raise ValueError(f"texts[{index - 1}] cannot be empty.")
             clean_texts.append(clean_text)
         return clean_texts
+
+    @staticmethod
+    def _write_wav(out_path: Path, wav: np.ndarray, sample_rate: int) -> None:
+        if out_path.name in RUNTIME_SLOT_FILENAMES and out_path.is_file():
+            sf.write(str(out_path), wav, sample_rate)
+            return
+        EmotionalSpeaker._write_wav_atomic(out_path, wav, sample_rate)
 
     @staticmethod
     def _write_wav_atomic(out_path: Path, wav: np.ndarray, sample_rate: int) -> None:
@@ -593,6 +595,16 @@ def _response_filename(path: str) -> str:
     return Path(path).name
 
 
+def _precreate_runtime_wavs(runtime_dir: Path) -> None:
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    placeholder = np.zeros(1, dtype=np.float32)
+    for name in RUNTIME_SLOT_FILENAMES:
+        path = runtime_dir / name
+        if path.is_file() and path.stat().st_size > 0:
+            continue
+        EmotionalSpeaker._write_wav_atomic(path, placeholder, RUNTIME_PLACEHOLDER_SAMPLE_RATE)
+
+
 def _iter_preload_specs(raw_specs):
     for raw_spec in raw_specs:
         for item in raw_spec.split(","):
@@ -665,6 +677,7 @@ def _build_startup_config(
         "personality": args.personality,
         "ref_dir": str(ref_dir),
         "runtime_dir": str(runtime_dir),
+        "runtime_output_files": [*RUNTIME_OUTPUT_FILENAMES, RUNTIME_COMBINED_FILENAME],
         "model_size": args.model_size,
         "clone_model_id": clone_model_id,
         "device_map": DEVICE_MAP,
@@ -698,7 +711,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--text", help="Text to synthesize (one-shot mode).")
     parser.add_argument("--language", help="English | Spanish | en | es (one-shot mode).")
     parser.add_argument("--emotion", help=f"One of: {sorted(PERSONALITY_TRAITS_BY_EMOTION)} (one-shot mode).")
-    parser.add_argument("--output", help=f"Output wav path. Relative paths are written under artifacts/<personality>/{RUNTIME_SUBDIR}/. If omitted, writes to artifacts/<personality>/{RUNTIME_SUBDIR}/voice_runtime_<lang>_<emotion>.wav")
+    parser.add_argument("--output", help=f"Output folder/path. Relative paths are written under artifacts/<personality>/{RUNTIME_SUBDIR}/ using generic names voice_runtime_1.wav, voice_runtime_2.wav, voice_runtime_3.wav, and voice_runtime.wav for the concatenated batch file.")
     parser.add_argument("--personality", default=DEFAULT_PERSONALITY, help=f"Personality folder under artifacts/ (default: {DEFAULT_PERSONALITY}).")
     parser.add_argument("--ref_dir", "--ref-dir", dest="ref_dir", help="Folder containing reference wav files. Defaults to artifacts/<personality>/ref/voice_design_clone_ref/.")
     parser.add_argument("--ref_text", "--ref-text", dest="ref_text", help="Transcript shared by all reference audios. Use --ref_text_en/--ref_text_es to override per language.")
@@ -743,6 +756,7 @@ def main() -> None:
         clone_model_id=clone_model_id,
         generation_options=generation_options,
     )
+    _precreate_runtime_wavs(Path(startup_config["runtime_dir"]))
     _print_startup_config(startup_config)
 
     speaker = EmotionalSpeaker(

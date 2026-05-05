@@ -237,11 +237,11 @@ voice_clone_ref_es_<emotion>.wav
 ### Inputs
 
 - `text` — what to say for a single output.
-- `texts` — server JSON only; list of up to 3 short phrases generated in one batch with the same language/emotion/prompt.
+- `texts` — server JSON only; list of up to 3 short phrases generated in one batch with the same language. `emotion` can be shared or one emotion per phrase.
 - `emotion` — a single emotion for all phrases, or in server batch JSON a list with one emotion per phrase.
 - `language` — `English` | `Spanish` (also accepts `en` / `es`).
 - Emotion values — one of `anger`, `disgust`, `fear`, `happiness`, `neutral`, `sadness`, `surprise`.
-- `--output` — destination wav path. Relative paths are saved under `artifacts/<personality>/generated_speech/voice_runtime/` using the normalized filename `voice_runtime_<lang>_<emotion>.wav`; absolute paths are used as-is. If omitted, the audio is saved as `artifacts/<personality>/generated_speech/voice_runtime/voice_runtime_<lang>_<emotion>.wav`. Batch JSON requests write individual files like `voice_runtime_<lang>_<emotion>_1.wav` and also one concatenated file named `voice_runtime_<lang>_<emotion1>_<emotion2>_<emotion3>.wav`.
+- `--output` — optional destination folder/path. Relative paths are saved under `artifacts/<personality>/generated_speech/voice_runtime/` using fixed runtime names: `voice_runtime_1.wav`, `voice_runtime_2.wav`, `voice_runtime_3.wav`, and `voice_runtime.wav` for the concatenated batch file. These files are created at startup if they do not exist yet, then overwritten in place by each request.
 - `--ref_dir` — optional folder containing reference audios.
 - `--ref_text`, `--ref_text_en`, `--ref_text_es` — optional shared reference transcript overrides.
 - `--model-size` — `0.6B` or `1.7B`; default is `0.6B` for runtime speed.
@@ -261,13 +261,13 @@ voice_clone_ref_es_<emotion>.wav
 One-shot (loads model, synthesizes one sentence, exits):
 
 ```bash
-python voice_runtime.py --text "¡Hola, qué alegría verte!" --language Spanish --emotion happiness --output voice_runtime_es_happiness.wav
+python voice_runtime.py --text "¡Hola, qué alegría verte!" --language Spanish --emotion happiness
 ```
 
 This writes:
 
 ```text
-artifacts/personality/generated_speech/voice_runtime/voice_runtime_es_happiness.wav
+artifacts/personality/generated_speech/voice_runtime/voice_runtime_1.wav
 ```
 
 Hot server (model stays loaded; one JSON request per stdin line, one JSON reply per stdout line):
@@ -283,8 +283,13 @@ python voice_runtime.py --serve
 Recommended server for the mixed-emotion chatbot example:
 
 ```bash
-python voice_runtime.py --serve --model-size 0.6B --latency-preset fast --prompt-mode icl --preload English:happiness --preload English:fear --preload English:neutral --warmup --warmup_language English --warmup_emotion neutral --warmup_text "Hello."
+python voice_runtime.py --serve --model-size 0.6B --latency-preset fast --prompt-mode icl --preload-all --warmup --warmup_language English --warmup_emotion neutral --warmup_text "Hello."
 ```
+
+Use `--preload-all` when you want every English/Spanish emotion prompt cached
+before the server accepts requests. `--warmup` only runs one short generation;
+that is usually enough to initialize the model/CUDA path, while the preloaded
+prompts cover the other language/emotion combinations.
 
 After the server prints `{"ready": true, ...}`, paste one JSON request per line:
 
@@ -298,10 +303,10 @@ At startup, the runtime prints the effective configuration to `stderr`: model id
 {"ready": true, "startup_seconds": 12.345}
 ```
 
-Each successful reply includes the generated wav path and request latency:
+Each successful reply includes the generated wav name and request latency:
 
 ```json
-{"ok": true, "output": "voice_runtime_en_fear.wav", "elapsed_seconds": 1.234, "effective_max_new_tokens": 384, "trim_removed_start_seconds": 0.596, "trim_removed_end_seconds": 0.465}
+{"ok": true, "output": "voice_runtime_1.wav", "elapsed_seconds": 1.234, "effective_max_new_tokens": 384, "trim_removed_start_seconds": 0.596, "trim_removed_end_seconds": 0.465}
 ```
 
 For batch requests with `texts`, the same loaded model and cached prompt are
@@ -309,16 +314,17 @@ used for all phrases. `emotion` can be one shared emotion or a list aligned
 with `texts`:
 
 ```json
-{"ok": true, "outputs": ["voice_runtime_en_fear_1.wav", "voice_runtime_en_fear_2.wav", "voice_runtime_en_fear_3.wav"], "elapsed_seconds": 2.345, "effective_max_new_tokens": 384, "batch_size": 3}
+{"ok": true, "outputs": ["voice_runtime_1.wav", "voice_runtime_2.wav", "voice_runtime_3.wav"], "elapsed_seconds": 2.345, "effective_max_new_tokens": 384, "batch_size": 3}
 ```
 
 Batch replies also include `combined_output`, a single wav made by concatenating
 the generated phrase wavs in order with 250 ms of silence between phrases.
 
-With per-phrase emotions, output names include each emotion:
+With per-phrase emotions, the output slots stay generic and the response keeps
+the per-item emotion metadata:
 
 ```json
-{"ok": true, "outputs": ["voice_runtime_en_happiness_1.wav", "voice_runtime_en_fear_2.wav", "voice_runtime_en_neutral_3.wav"], "combined_output": "voice_runtime_en_happiness_fear_neutral.wav", "elapsed_seconds": 2.345, "effective_max_new_tokens": 384, "batch_size": 3}
+{"ok": true, "outputs": ["voice_runtime_1.wav", "voice_runtime_2.wav", "voice_runtime_3.wav"], "combined_output": "voice_runtime.wav", "elapsed_seconds": 2.345, "effective_max_new_tokens": 384, "batch_size": 3}
 ```
 
 For chatbot-style output, prefer `texts` instead of concatenating several short
@@ -335,10 +341,10 @@ This uses the runtime defaults: `--model-size 0.6B --latency-preset fast --promp
 
 The `fast` preset uses compact sampling (`top_k=5`, `top_p=0.8`) and caps `max_new_tokens` at `384`. This avoids the near-silent outputs seen with fully deterministic generation while keeping latency low. If a request contains longer text and the configured token cap is too low, runtime raises the effective `max_new_tokens` for that request to avoid truncated speech. The `balanced` preset keeps a wider sampling space. The `quality` preset leaves Qwen3-TTS generation defaults unchanged.
 
-Fast reliable mode for longer turns:
+Fast reliable mode for longer turns or mixed-emotion chatbot replies:
 
 ```bash
-python voice_runtime.py --serve --model-size 0.6B --latency-preset fast --prompt-mode icl --preload English:happiness --preload English:fear --preload English:neutral --warmup --warmup_language English --warmup_emotion neutral --warmup_text "Hello."
+python voice_runtime.py --serve --model-size 0.6B --latency-preset fast --prompt-mode icl --preload-all --warmup --warmup_language English --warmup_emotion neutral --warmup_text "Hello."
 ```
 
 `--prompt-mode x_vector` can be faster, but with some references it can produce very low-amplitude or silent audio. Use `icl` for reliable audible output.
@@ -440,9 +446,10 @@ artifacts/personality/generated_speech/voice_design_clone/design_clone_en_<emoti
 artifacts/personality/generated_speech/voice_design_clone/design_clone_es_<emotion>.wav
 artifacts/personality/generated_speech/voice_clone/clone_en_<emotion>.wav
 artifacts/personality/generated_speech/voice_clone/clone_es_<emotion>.wav
-artifacts/personality/generated_speech/voice_runtime/voice_runtime_<lang>_<emotion>.wav
-artifacts/personality/generated_speech/voice_runtime/voice_runtime_<lang>_<emotion>_<index>.wav
-artifacts/personality/generated_speech/voice_runtime/voice_runtime_<lang>_<emotion1>_<emotion2>_<emotion3>.wav
+artifacts/personality/generated_speech/voice_runtime/voice_runtime_1.wav
+artifacts/personality/generated_speech/voice_runtime/voice_runtime_2.wav
+artifacts/personality/generated_speech/voice_runtime/voice_runtime_3.wav
+artifacts/personality/generated_speech/voice_runtime/voice_runtime.wav
 ```
 
 To synthesize one runtime utterance from the default VoiceDesign references:
@@ -487,9 +494,10 @@ emotional-tts/
           clone_en_<emotion>.wav
           clone_es_<emotion>.wav
         voice_runtime/
-          voice_runtime_<lang>_<emotion>.wav
-          voice_runtime_<lang>_<emotion>_<index>.wav
-          voice_runtime_<lang>_<emotion1>_<emotion2>_<emotion3>.wav
+          voice_runtime_1.wav
+          voice_runtime_2.wav
+          voice_runtime_3.wav
+          voice_runtime.wav
       ref/
         voice_design_clone_ref/
           voice_design_ref_en_<emotion>.wav
