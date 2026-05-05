@@ -210,7 +210,7 @@ emotional-tts/
 
 ## Acknowledgments
 
-This repository contains custom project code together with local copies of [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS).
+This project builds on top of [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS), used via the `qwen-tts` package and the `Qwen/Qwen3-TTS-*` models on Hugging Face.
 
 ## Licenses
 
