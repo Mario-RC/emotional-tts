@@ -16,7 +16,7 @@ class GenerationDefaults(TypedDict):
 
 
 # Folder label used to group outputs for this personality preset.
-DEFAULT_PERSONALITY_FOLDER = "personality_1"
+DEFAULT_PERSONALITY_FOLDER = "personality"
 
 BASE_IDENTITY_EN = BASE_IDENTITY_ES = ("Voice: 8-year-old boy. Acoustic profile: smooth low-pitch, clear and crisp articulation.")
 

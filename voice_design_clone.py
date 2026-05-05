@@ -261,7 +261,7 @@ def _parse_args() -> argparse.Namespace:
         nargs="+",
         help=(
             "Output folder name under output/. "
-            "Example: --output_dir personality_1"
+            "Example: --output_dir personality"
         ),
     )
     # Accepts legacy freeform usage like: python3 voice_design_clone.py -- output_dir personality 3

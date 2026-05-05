@@ -1,14 +1,17 @@
 # Emotional TTS
 
-This project contains two main pipelines to generate emotion-aware audio in English and Spanish.
+This project provides two batch pipelines to build a per-personality voice library and a runtime entry point to synthesize arbitrary text on demand, in English or Spanish, with one of seven emotions per turn.
 
 ## Main Scripts
 
 - `voice_design_clone.py`
-  Generates reference voices from instructions (VoiceDesign) and then clones the final target sentences.
+  Batch pipeline. Generates reference voices from instructions (VoiceDesign) and then clones the final target sentences.
 
 - `voice_clone.py`
-  Clones directly from uploaded reference audios (without VoiceDesign).
+  Batch pipeline. Clones directly from uploaded reference audios (without VoiceDesign).
+
+- `voice_runtime.py`
+  Runtime entry point for per-turn use cases (e.g. a robot's dialogue loop). Loads the Base clone model once, reuses the on-disk references built by the batch pipelines, and synthesizes any `(text, language, emotion)` request on demand.
 
 - `voice_personality_config.py`
   Central configuration for emotions, reference texts, target sentences, and personality folder name.
@@ -135,6 +138,54 @@ output/
       voice_clone_ref_es_<emotion>.wav
 ```
 
+## Runtime: Per-Turn Synthesis
+
+Script: `voice_runtime.py`
+
+### What It Does
+
+1. Loads the Base clone model once: `Qwen/Qwen3-TTS-12Hz-1.7B-Base`.
+2. Reads on-disk references from `output/<personality>/voice_clone_ref/` (default personality: `personality`). Run one of the batch pipelines first to produce them.
+3. On each request, builds (and caches) a clone prompt for the requested `(language, emotion)` and synthesizes the text into a wav file.
+
+The first request for a given `(language, emotion)` pays for prompt construction; subsequent requests with the same combo reuse the cached prompt and only run the clone forward pass.
+
+### Inputs
+
+- `text` — what to say.
+- `language` — `English` | `Spanish` (also accepts `en` / `es`).
+- `emotion` — one of `anger`, `disgust`, `fear`, `happiness`, `neutral`, `sadness`, `surprise`.
+- `output` — destination wav path. Optional: if omitted, the audio is saved as `output/<personality>/runtime/<timestamp>_<emotion>_<lang>.wav`.
+
+### Modes
+
+One-shot (loads model, synthesizes one sentence, exits):
+
+```bash
+python voice_runtime.py --text "¡Hola, qué alegría verte!" --language Spanish --emotion happiness --output turn1.wav
+```
+
+Hot server (model stays loaded; one JSON request per stdin line, one JSON reply per stdout line):
+
+```bash
+python voice_runtime.py --serve
+{"text":"Hola","language":"Spanish","emotion":"happiness","output":"t1.wav"}
+{"text":"Wait, did you hear that?","language":"English","emotion":"fear"}
+```
+
+In-process (recommended when the dialogue loop is Python):
+
+```python
+from voice_runtime import EmotionalSpeaker
+
+speaker = EmotionalSpeaker(personality="personality")
+speaker.preload("Spanish", "happiness")  # optional, removes first-turn latency
+speaker.say(text="Hola", language="Spanish", emotion="happiness")  # auto path
+speaker.say(text="Hola", language="Spanish", emotion="happiness", output="t1.wav")
+```
+
+Switch personalities with `--personality other_personality` (CLI) or `EmotionalSpeaker(personality="...")` (Python).
+
 ## Configuration
 
 Edit `voice_personality_config.py` to change:
@@ -168,8 +219,8 @@ python voice_clone.py
 To override the output folder name used by `voice_design_clone.py` or `voice_clone.py`:
 
 ```bash
-python3 voice_design_clone.py --output_dir personality_1
-python3 voice_clone.py --output_dir personality_1
+python3 voice_design_clone.py --output_dir personality
+python3 voice_clone.py --output_dir personality
 ```
 
 The script also accepts a legacy freeform style:
@@ -179,7 +230,7 @@ python3 voice_design_clone.py -- output_dir personality 1
 python3 voice_clone.py -- output_dir personality 1
 ```
 
-Both commands save into `output/personality_1/`.
+Both commands save into `output/personality/`.
 
 ## Current Structure
 
@@ -189,6 +240,7 @@ emotional-tts/
   requirements.txt
   voice_design_clone.py
   voice_clone.py
+  voice_runtime.py
   voice_personality_config.py
   voice_clone_ref/
   output/
